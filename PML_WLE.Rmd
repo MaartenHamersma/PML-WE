@@ -1,0 +1,162 @@
+---
+title: "Weight Lifting Classification"
+author: "M Hamersma"
+date: "14 April 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+This is a HAR (Human Activity Recognition) model. The objective is to analyse the x, y and z direction movement data captured from wearable fitness devices while doing bicep curls with a 1.25kg dumbell, and classify new exercises as having been done correctly or not. Data and concept is from Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements.
+
+Read more: http://groupware.les.inf.puc-rio.br/work.jsf?p1=10335#ixzz6JZBFyhzW
+
+The model uses a machine learning algorithm, based on the captured data. The data will be used for training the model against a 70% subset, then validatinig it against the remaining 30% of data to estimate an Out of Sample error. Finally it is tested against a test data set of 20 exercises supplied by the John Hopkins Data Science Specialization course material.
+
+### Data and Environment
+## Prepare the environment
+```{r prepare}
+setwd("~/R/PML/Project")
+library(caret) 
+library(readr)
+library(corrplot)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+## Loading Data
+The data was downloaded to two csv files:
+```{r load data}
+training <- read.csv("pml-training1.csv", sep = ";", na.strings = c("NA", "#DIV/0!", ""))
+testing <- read.csv("pml-testing1.csv", sep = ";", na.strings = c("NA", "#DIV/0!", ""))
+
+dim(training)
+dim(testing)
+```
+
+## Tidying up
+The data contains many NA and near zero variables. Due to the nature of the Machine Learning algorithms, the amount of data, and the fact that the exercises has already been classified, there is no need to dig too deep - rather focus on detecting the variables that influence the classification.
+
+# The first five columns are just  name identfiers and can be removed.
+```{r remove_identifiers}
+names(training[, 1:5])
+training <- training[, -(1:5)]
+dim(training)
+```
+
+# Remove variables from training with near zero variance, using the train set as reference
+```{r nzv}
+NearZV <- nearZeroVar(training)
+training <- training[, -NearZV]
+dim(training)
+```
+
+# remove variables that are mostly NA
+```{r NA}
+
+AllNA    <- sapply(training, function(x) mean(is.na(x))) > 0.95
+training <- training[, AllNA==FALSE]
+dim(training)
+```
+
+## Modelling
+# Divide the training data into a train and validation set
+```{r train_and_validate}
+set.seed(100)
+inTrain  <- createDataPartition(training$classe, p=0.75, list=FALSE)
+Train <- training[inTrain, ]
+Validate  <- training[-inTrain, ]
+dim(Train)
+dim(Validate)
+```
+
+# Inter-variable correlation
+If too many variables in the training model correlate it can be confusing without contributing anything.
+```{r cor}
+corMatrix <- cor(Train[, -54])
+```
+```{r corplot, echo = FALSE}
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+```
+There are not many that correlate, so we can proceed with classifier modelling.
+The models of to choose are Random Forests, Decision Tree and Gradient Boost models.
+The one with the best Accuracy will be chosen for the Test excercise.
+
+# Random Forest
+```{r Random_Forest}
+set.seed(100)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modFitRandForest <- train(classe ~ ., data=Train, method="rf",
+                          trControl=controlRF)
+modFitRandForest$finalModel
+```
+Validate against the Validation Set:
+```{r validateRF}
+predictRandForest <- predict(modFitRandForest, newdata=Validate)
+confMatRandForest <- confusionMatrix(predictRandForest, Validate$classe)
+confMatRandForest
+```
+
+Random Forest Validation Results = : ** `r round(confMatRandForest$overall['Accuracy'], 4)`** 
+
+```{r PlotValRF, echo = FALSE}
+plot(confMatRandForest$table, col = confMatRandForest$byClass, 
+     main = paste("Random Forest: Validated Accuracy =",
+                  round(confMatRandForest$overall['Accuracy'], 4)))
+```
+
+# Decision Tree model
+```{r DT}
+set.seed(100)
+modFitDecTree <- rpart(classe ~ ., data=Train, method="class")
+fancyRpartPlot(modFitDecTree)
+```
+Valdidate against Validate data set:
+```{r valDT}
+predictDecTree <- predict(modFitDecTree, newdata=Validate, type="class")
+confMatDecTree <- confusionMatrix(predictDecTree, Validate$classe)
+confMatDecTree
+```
+Decision Tree Accuracy = ** `r round(confMatDecTree$overall['Accuracy'], 4)` **
+```{r PlotValDT, echo = FALSE}
+plot(confMatDecTree$table, col = confMatDecTree$byClass, 
+     main = paste("Decision Tree Validated Accuracy =",
+                  round(confMatDecTree$overall['Accuracy'], 4)))
+```
+# Boost model
+```{r gbm}
+set.seed(100)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=Train, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+modFitGBM$finalModel
+```
+Valdiation on Validate dataset
+```{r Valgbm}
+predictGBM <- predict(modFitGBM, newdata=Validate)
+confMatGBM <- confusionMatrix(predictGBM, Validate$classe)
+confMatGBM
+```
+GBM Model Accurcay : ** `r round(confMatGBM$overall['Accuracy'], 4)`
+```{r plotGBM, echo = FALSE}
+plot(confMatGBM$table, col = confMatGBM$byClass, 
+     main = paste("GBM Validated Accuracy =", round(confMatGBM$overall['Accuracy'], 4)))
+```
+
+## Choose the best model:
+Random Forest Accuracy: **`r round(confMatRandForest$overall['Accuracy'], 4)` **
+Decision Tree Accuracy: ** `r round(confMatDecTree$overall['Accuracy'], 4)` **
+Gradient Boost Accuracy: ** `r round(confMatGBM$overall['Accuracy'], 4)` **
+
+## Run against Test data 20 records
+```{r predictTEST}
+predictTEST <- predict(modFitRandForest, newdata=testing)
+predictTEST  
+```
